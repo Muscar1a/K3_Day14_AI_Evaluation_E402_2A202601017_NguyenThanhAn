@@ -25,10 +25,17 @@ The reranking helper is an optional bonus exercise and may remain unimplemented.
 
 from __future__ import annotations
 
+import os
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().with_name(".env"))
+
 
 
 # ---------------------------------------------------------------------------
@@ -129,66 +136,105 @@ def _tokenize(text: str) -> set[str]:
 
 class RAGASEvaluator:
     """
-    Evaluates RAG pipeline outputs using RAGAS-inspired heuristics.
-
-    All metrics use word overlap rather than LLM calls for simplicity.
-    Replace with actual LLM-based evaluation in production.
+    Evaluates RAG pipeline outputs using RAGAS-inspired OpenAI LLM (gpt-4o-mini) by default,
+    with fallback to word-overlap heuristics when offline or without API key.
     """
 
+    def __init__(self, use_llm: bool = True, model: str = "gpt-4o-mini") -> None:
+        self.use_llm = use_llm
+        self.model = model
+
+
+    def _call_openai_eval(self, prompt: str) -> float | None:
+        if not self.use_llm:
+            return None
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert RAG Evaluation Judge. "
+                            "Return ONLY a JSON object with keys 'score' (float between 0.0 and 1.0) "
+                            "and 'reasoning' (string)."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+            raw = response.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            val = float(data.get("score", 0.0))
+            return max(0.0, min(1.0, round(val, 3)))
+        except Exception:
+            return None
+
+
     def evaluate_faithfulness(self, answer: str, context: str) -> float:
-        """
-        Measure how grounded the answer is in the context.
-
-        Heuristic:
-            answer_tokens = _tokenize(answer)
-            context_tokens = _tokenize(context)
-            faithfulness = |answer_tokens ∩ context_tokens| / |answer_tokens|
-            Clamp to [0.0, 1.0]. Return 1.0 if answer is empty.
-
-        Returns:
-            float in [0.0, 1.0] — 1.0 = fully grounded in context.
-        """
+        """Measure how grounded the answer is in the context using gpt-4o-mini."""
         answer_tokens = _tokenize(answer)
         if not answer_tokens:
             return 1.0
+        prompt = (
+            f"Metric: Faithfulness / Groundedness\n"
+            f"Context: {context}\n"
+            f"Answer: {answer}\n"
+            f"Evaluate if every statement in the answer is grounded in the context. "
+            f"Score 1.0 for fully grounded or valid safety refusal; lower for ungrounded claims."
+        )
+        llm_score = self._call_openai_eval(prompt)
+        if llm_score is not None:
+            return llm_score
+
         context_tokens = _tokenize(context)
         overlap = answer_tokens & context_tokens
         score = len(overlap) / len(answer_tokens)
         return max(0.0, min(1.0, score))
 
     def evaluate_relevance(self, answer: str, question: str) -> float:
-        """
-        Measure how relevant the answer is to the question.
-
-        Heuristic:
-            relevance = |answer_tokens ∩ question_tokens| / |question_tokens|
-            Clamp to [0.0, 1.0]. Return 1.0 if question is empty.
-
-        Returns:
-            float in [0.0, 1.0]
-        """
+        """Measure how relevant the answer is to the question using gpt-4o-mini."""
         question_tokens = _tokenize(question)
         if not question_tokens:
             return 1.0
+        prompt = (
+            f"Metric: Answer Relevance\n"
+            f"Question: {question}\n"
+            f"Answer: {answer}\n"
+            f"Evaluate how directly and completely the answer responds to the question. "
+            f"Score 1.0 for a complete direct answer or valid safety refusal."
+        )
+        llm_score = self._call_openai_eval(prompt)
+        if llm_score is not None:
+            return llm_score
+
         answer_tokens = _tokenize(answer)
         overlap = answer_tokens & question_tokens
         score = len(overlap) / len(question_tokens)
         return max(0.0, min(1.0, score))
 
     def evaluate_completeness(self, answer: str, expected: str) -> float:
-        """
-        Measure how well the answer covers the expected answer.
-
-        Heuristic:
-            completeness = |answer_tokens ∩ expected_tokens| / |expected_tokens|
-            Clamp to [0.0, 1.0]. Return 1.0 if expected is empty.
-
-        Returns:
-            float in [0.0, 1.0]
-        """
+        """Measure how well the answer covers the expected answer using gpt-4o-mini."""
         expected_tokens = _tokenize(expected)
         if not expected_tokens:
             return 1.0
+        prompt = (
+            f"Metric: Answer Completeness\n"
+            f"Expected Reference Answer: {expected}\n"
+            f"Actual Answer: {answer}\n"
+            f"Evaluate how completely the actual answer covers the key points of the reference answer."
+        )
+        llm_score = self._call_openai_eval(prompt)
+        if llm_score is not None:
+            return llm_score
+
         answer_tokens = _tokenize(answer)
         overlap = answer_tokens & expected_tokens
         score = len(overlap) / len(expected_tokens)
@@ -199,19 +245,21 @@ class RAGASEvaluator:
     # -----------------------------------------------------------------------
 
     def evaluate_context_recall(self, contexts: list[str], expected: str) -> float:
-        """Context Recall — how much of the expected answer is covered by the
-        UNION of retrieved chunks.
-
-        Heuristic:
-            union_tokens = ⋃ _tokenize(chunk) for chunk in contexts
-            recall = |expected_tokens ∩ union_tokens| / |expected_tokens|
-            Clamp to [0.0, 1.0]. Return 1.0 if expected is empty.
-
-        Low recall => retriever missed evidence the answer needs.
-        """
+        """Context Recall — how much of the expected answer is covered by retrieved chunks."""
         expected_tokens = _tokenize(expected)
         if not expected_tokens:
             return 1.0
+        union_text = "\n".join(contexts)
+        prompt = (
+            f"Metric: Context Recall\n"
+            f"Expected Reference Answer: {expected}\n"
+            f"Retrieved Chunks:\n{union_text}\n"
+            f"Evaluate how much of the reference answer facts are present in the retrieved chunks."
+        )
+        llm_score = self._call_openai_eval(prompt)
+        if llm_score is not None:
+            return llm_score
+
         union_tokens: set[str] = set()
         for chunk in contexts:
             union_tokens.update(_tokenize(chunk))
@@ -225,23 +273,23 @@ class RAGASEvaluator:
         expected: str,
         relevance_threshold: float = 0.1,
     ) -> float:
-        """Context Precision — RANK-AWARE Average Precision (AP@K), like RAGAS.
-        Rewards retrievers that place RELEVANT chunks BEFORE noise.
-
-        Steps:
-            1. A chunk is "relevant" if it covers >= relevance_threshold of the
-               expected tokens:  |chunk ∩ expected| / |expected| >= threshold
-            2. Precision@k = (#relevant in top-k) / k
-            3. AP@K = (1 / #relevant) * Σ_k [ Precision@k · relevant_k ]
-
-        Return 1.0 if expected empty; 0.0 if no chunks or none relevant.
-        Reordering relevant chunks earlier (reranking) raises this score.
-        """
+        """Context Precision — RANK-AWARE Average Precision (AP@K)."""
         expected_tokens = _tokenize(expected)
         if not expected_tokens:
             return 1.0
         if not contexts:
             return 0.0
+
+        union_text = "\n".join([f"Chunk {i+1}: {c}" for i, c in enumerate(contexts)])
+        prompt = (
+            f"Metric: Context Precision (Rank-Aware AP@K)\n"
+            f"Expected Reference Answer: {expected}\n"
+            f"Retrieved Chunks:\n{union_text}\n"
+            f"Evaluate if the most relevant chunks are placed at top positions (Chunk 1-2)."
+        )
+        llm_score = self._call_openai_eval(prompt)
+        if llm_score is not None:
+            return llm_score
 
         relevant_flags = []
         for chunk in contexts:
@@ -263,6 +311,7 @@ class RAGASEvaluator:
 
         ap = sum_p / total_relevant
         return max(0.0, min(1.0, ap))
+
 
     def run_full_eval(
         self,
@@ -452,7 +501,11 @@ class BenchmarkRunner:
         Run all QA pairs through the agent and evaluate each result.
         """
         results: list[EvalResult] = []
-        for pair in qa_pairs:
+        total_count = len(qa_pairs)
+        for idx, pair in enumerate(qa_pairs, start=1):
+            item_id = pair.metadata.get("id", f"QA{idx:02d}") if pair.metadata else f"QA{idx:02d}"
+            diff = pair.metadata.get("difficulty", "normal") if pair.metadata else "normal"
+            print(f"[{idx}/{total_count}] Evaluating Test {item_id:<4} ({diff:<11}): {pair.question[:60]}...", flush=True)
             actual_answer = agent_fn(pair.question)
             contexts_to_pass = pair.retrieved_contexts if pair.retrieved_contexts else None
             eval_res = evaluator.run_full_eval(
@@ -465,6 +518,7 @@ class BenchmarkRunner:
             eval_res.qa_pair = pair
             results.append(eval_res)
         return results
+
 
     def generate_report(self, results: list[EvalResult]) -> dict[str, Any]:
         """

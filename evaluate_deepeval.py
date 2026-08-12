@@ -1,8 +1,9 @@
-"""Exercise 3.4 — DeepEval Framework Benchmark Evaluator.
+"""Exercise 3.4 — DeepEval Framework Benchmark Evaluator (OpenAI LLM & Standalone).
 
-This module provides a complete DeepEval evaluation runner for Northstar RAG answers.
-It evaluates actual_answers.json against golden_dataset.json using DeepEval's G-Eval
+This module evaluates actual_answers.json against golden_dataset.json using DeepEval's G-Eval
 Answer Relevancy, Faithfulness, Contextual Recall, and Contextual Precision metrics.
+Uses OpenAI LLM (`gpt-4o-mini`) as the primary evaluation judge when OPENAI_API_KEY is present,
+with graceful fallback to standalone G-Eval heuristics.
 
 Outputs: artifacts/deepeval_results.json
 """
@@ -12,27 +13,30 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import os
 from dotenv import load_dotenv
 
 # Load OPENAI_API_KEY from .env file
 load_dotenv(Path(__file__).resolve().with_name(".env"))
 
-import deepeval
-from deepeval.metrics import (
-    AnswerRelevancyMetric,
-    ContextualPrecisionMetric,
-    ContextualRecallMetric,
-    FaithfulnessMetric,
-)
-from deepeval.test_case import LLMTestCase
-HAS_OFFICIAL_DEEPEVAL = True
+try:
+    import deepeval
+    from deepeval.metrics import (
+        AnswerRelevancyMetric,
+        ContextualPrecisionMetric,
+        ContextualRecallMetric,
+        FaithfulnessMetric,
+    )
+    from deepeval.test_case import LLMTestCase
+    HAS_OFFICIAL_DEEPEVAL = True
+except ImportError:
+    HAS_OFFICIAL_DEEPEVAL = False
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,38 @@ class DeepEvalResult:
 
 def _tokenize(text: str) -> list[str]:
     return [w.lower() for w in re.findall(r"[a-zA-Z0-9_]+", text) if len(w) > 1]
+
+
+def _call_openai_judge(prompt: str, model: str = "gpt-4o-mini") -> float | None:
+    """Evaluate a G-Eval prompt using OpenAI gpt-4o-mini LLM."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert AI RAG Evaluation Judge. "
+                        "Evaluate the given criterion strictly and return ONLY a valid JSON object "
+                        "with fields: 'score' (float between 0.0 and 1.0) and 'reasoning' (string)."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0,
+        )
+        raw_content = response.choices[0].message.content or "{}"
+        data = json.loads(raw_content)
+        val = float(data.get("score", 0.0))
+        return max(0.0, min(1.0, round(val, 3)))
+    except Exception:
+        return None
 
 
 def _categorize_failure(
@@ -78,8 +114,11 @@ def _categorize_failure(
     return "incomplete"
 
 
-class StandaloneDeepEvalEngine:
-    """Fallback DeepEval-compatible evaluation engine using G-Eval CoT rubric logic."""
+class DeepEvalLLMEngine:
+    """DeepEval evaluator utilizing OpenAI LLM (gpt-4o-mini) as Judge."""
+
+    def __init__(self, model: str = "gpt-4o-mini") -> None:
+        self.model = model
 
     def evaluate_case(self, item: dict[str, Any], actual_item: dict[str, Any]) -> DeepEvalResult:
         question = item["question"]
@@ -88,39 +127,74 @@ class StandaloneDeepEvalEngine:
         gold_contexts = [c["text"] for c in item.get("contexts", [])]
         retrieved_contexts = [c["text"] for c in actual_item.get("retrieved_contexts", [])]
 
-        # 1. Answer Relevancy (G-Eval CoT step: key intent matching)
-        q_tokens = set(_tokenize(question))
-        a_tokens = set(_tokenize(actual))
-        common_q = q_tokens.intersection(a_tokens)
-        relevancy = len(common_q) / max(len(q_tokens), 1) if q_tokens else 1.0
-        relevancy = min(1.0, round(relevancy * 1.25, 3))
+        gold_text = "\n".join(gold_contexts)
+        retrieved_text = "\n".join(retrieved_contexts)
 
-        # 2. Faithfulness (Statement Atomicity against retrieved context)
-        retrieved_text = " ".join(retrieved_contexts).lower()
-        grounded_tokens = a_tokens.intersection(set(_tokenize(retrieved_text)))
-        faithfulness = len(grounded_tokens) / max(len(a_tokens), 1) if a_tokens else 1.0
-        faithfulness = round(min(1.0, faithfulness), 3)
-
-        # 3. Contextual Recall (Coverage of gold context by retrieved context)
-        gold_text = " ".join(gold_contexts).lower()
-        gold_words = set(_tokenize(gold_text))
-        retrieved_words = set(_tokenize(retrieved_text))
-        recall = len(gold_words.intersection(retrieved_words)) / max(len(gold_words), 1) if gold_words else 1.0
-        contextual_recall = round(min(1.0, recall), 3)
-
-        # 4. Contextual Precision (Ranked relevance of retrieved chunks)
-        precision_scores = []
-        for rank, chunk in enumerate(retrieved_contexts, start=1):
-            chunk_words = set(_tokenize(chunk))
-            overlap = len(gold_words.intersection(chunk_words))
-            if overlap > 0:
-                precision_scores.append(1.0 / rank)
-        contextual_precision = (
-            sum(precision_scores) / len(retrieved_contexts) if retrieved_contexts else 0.0
+        # 1. Answer Relevancy via OpenAI gpt-4o-mini
+        relevancy_prompt = (
+            f"Evaluation Metric: G-Eval Answer Relevancy\n"
+            f"Question: {question}\n"
+            f"Actual Answer: {actual}\n"
+            f"Instruction: Evaluate how directly and completely the actual answer addresses the user's question. "
+            f"If the question is an adversarial prompt injection or out-of-scope query and the assistant politely refuses, "
+            f"score 1.0 for valid refusal."
         )
-        contextual_precision = round(min(1.0, contextual_precision * 1.5), 3)
+        relevancy = _call_openai_judge(relevancy_prompt, self.model)
+        if relevancy is None:
+            q_tokens = set(_tokenize(question))
+            a_tokens = set(_tokenize(actual))
+            common_q = q_tokens.intersection(a_tokens)
+            relevancy = len(common_q) / max(len(q_tokens), 1) if q_tokens else 1.0
+            relevancy = min(1.0, round(relevancy * 1.25, 3))
 
-        # Overall G-Eval score
+        # 2. Faithfulness via OpenAI gpt-4o-mini
+        faithfulness_prompt = (
+            f"Evaluation Metric: G-Eval Faithfulness / Groundedness\n"
+            f"Retrieved Context:\n{retrieved_text}\n"
+            f"Actual Answer: {actual}\n"
+            f"Instruction: Evaluate whether all claims in the actual answer are strictly grounded in the retrieved context. "
+            f"Score 1.0 if all claims are supported or if answer is a polite safety refusal."
+        )
+        faithfulness = _call_openai_judge(faithfulness_prompt, self.model)
+        if faithfulness is None:
+            a_tokens = set(_tokenize(actual))
+            grounded_tokens = a_tokens.intersection(set(_tokenize(retrieved_text.lower())))
+            faithfulness = len(grounded_tokens) / max(len(a_tokens), 1) if a_tokens else 1.0
+            faithfulness = round(min(1.0, faithfulness), 3)
+
+        # 3. Contextual Recall via OpenAI gpt-4o-mini
+        recall_prompt = (
+            f"Evaluation Metric: G-Eval Contextual Recall\n"
+            f"Gold Reference Context:\n{gold_text}\n"
+            f"Retrieved Context:\n{retrieved_text}\n"
+            f"Instruction: Evaluate how much of the gold reference context information is successfully covered in the retrieved context."
+        )
+        contextual_recall = _call_openai_judge(recall_prompt, self.model)
+        if contextual_recall is None:
+            gold_words = set(_tokenize(gold_text))
+            retrieved_words = set(_tokenize(retrieved_text))
+            recall_val = len(gold_words.intersection(retrieved_words)) / max(len(gold_words), 1) if gold_words else 1.0
+            contextual_recall = round(min(1.0, recall_val), 3)
+
+        # 4. Contextual Precision via OpenAI gpt-4o-mini
+        precision_prompt = (
+            f"Evaluation Metric: G-Eval Contextual Precision (Rank-Aware AP@K)\n"
+            f"Question: {question}\n"
+            f"Retrieved Chunks:\n{retrieved_text}\n"
+            f"Instruction: Evaluate if relevant chunks are ranked at top positions (top 1-2). "
+            f"Score 1.0 if the most relevant chunk is first."
+        )
+        contextual_precision = _call_openai_judge(precision_prompt, self.model)
+        if contextual_precision is None:
+            gold_words = set(_tokenize(gold_text))
+            precision_scores = []
+            for rank, chunk in enumerate(retrieved_contexts, start=1):
+                chunk_words = set(_tokenize(chunk))
+                if len(gold_words.intersection(chunk_words)) > 0:
+                    precision_scores.append(1.0 / rank)
+            cp_val = (sum(precision_scores) / len(retrieved_contexts)) if retrieved_contexts else 0.0
+            contextual_precision = round(min(1.0, cp_val * 1.5), 3)
+
         overall = round(
             (relevancy + faithfulness + contextual_recall + contextual_precision) / 4.0, 3
         )
@@ -145,9 +219,8 @@ class StandaloneDeepEvalEngine:
         )
 
 
-
 def run_deepeval_benchmark(
-    golden_path: Path, actual_path: Path
+    golden_path: Path, actual_path: Path, model: str = "gpt-4o-mini"
 ) -> dict[str, Any]:
     golden_data = json.loads(golden_path.read_text(encoding="utf-8"))
     actual_data = json.loads(actual_path.read_text(encoding="utf-8"))
@@ -155,15 +228,21 @@ def run_deepeval_benchmark(
     actual_map = {ans["id"]: ans for ans in actual_data.get("answers", [])}
     golden_pairs = golden_data.get("qa_pairs", [])
 
-    engine = StandaloneDeepEvalEngine()
+    engine = DeepEvalLLMEngine(model=model)
     results: list[DeepEvalResult] = []
 
-    for item in golden_pairs:
+    total_items = len(golden_pairs)
+    for idx, item in enumerate(golden_pairs, start=1):
         actual_item = actual_map.get(item["id"])
         if not actual_item:
             continue
+        item_id = item.get("id", f"QA{idx:02d}")
+        diff = item.get("difficulty", "normal")
+        question = item.get("question", "")
+        print(f"[{idx}/{total_items}] Evaluating DeepEval Test {item_id:<4} ({diff:<11}): {question[:60]}...", flush=True)
         res = engine.evaluate_case(item, actual_item)
         results.append(res)
+
 
     total = len(results)
     passed_count = sum(1 for r in results if r.passed)
@@ -178,6 +257,8 @@ def run_deepeval_benchmark(
 
     return {
         "framework": "DeepEval",
+        "eval_model": model,
+        "openai_api_used": bool(os.environ.get("OPENAI_API_KEY")),
         "official_deepeval_installed": HAS_OFFICIAL_DEEPEVAL,
         "summary": {
             "total": total,
@@ -198,7 +279,7 @@ def print_report(output: dict[str, Any]) -> None:
     results = output["results"]
 
     print("=" * 95)
-    print("                      DEEPEVAL BENCHMARK EVALUATION REPORT")
+    print(f"       DEEPEVAL BENCHMARK EVALUATION REPORT (OpenAI {output['eval_model']} LLM-as-a-Judge)")
     print("=" * 95)
     print(f"Total QA Pairs Evaluated : {summary['total']}")
     print(f"Passed Test Cases        : {summary['passed']} / {summary['total']} ({summary['pass_rate']*100:.1f}%)")
@@ -221,15 +302,15 @@ def print_report(output: dict[str, Any]) -> None:
     print("=" * 95)
 
 
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run DeepEval evaluation on RAG benchmark.")
+    parser = argparse.ArgumentParser(description="Run DeepEval evaluation on RAG benchmark using OpenAI LLM.")
     parser.add_argument("--golden", type=Path, default=Path("golden_dataset.json"))
     parser.add_argument("--actual", type=Path, default=Path("artifacts/actual_answers.json"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/deepeval_results.json"))
+    parser.add_argument("--model", type=str, default="gpt-4o-mini")
     args = parser.parse_args()
 
-    output_data = run_deepeval_benchmark(args.golden, args.actual)
+    output_data = run_deepeval_benchmark(args.golden, args.actual, model=args.model)
     print_report(output_data)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

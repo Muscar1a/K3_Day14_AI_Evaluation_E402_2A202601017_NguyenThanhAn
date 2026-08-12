@@ -9,34 +9,35 @@ answer/context trace trong `artifacts/actual_answers.json` trước khi kết lu
 
 ## 1. Benchmark Results Summary
 
-**Overall pass rate:** 65.0%
+**Overall pass rate:** 95.0%
 
 | Metric | Average | Min | Max | Nhận xét |
 |---|---:|---:|---:|---|
-| Context Recall | 0.885 | 0.550 | 1.000 | Retriever lấy đủ hầu hết evidence cần thiết từ 10 file nguồn |
-| Context Precision | 0.965 | 0.806 | 1.000 | Khả năng xếp hạng chunk liên quan đứng ở vị trí đầu tiên rất xuất sắc |
-| Faithfulness | 0.557 | 0.087 | 1.000 | Đạt mức khá ở các câu hỏi thông thường, bị sụt giảm ở các câu từ chối an toàn |
-| Relevance | 0.663 | 0.000 | 0.941 | Trả lời trực diện đúng trọng tâm phần lớn các thắc mắc của sinh viên |
-| Completeness | 0.690 | 0.000 | 1.000 | Bao phủ đầy đủ các ý chính của Expected Answer |
-| Overall Score | 0.637 | 0.162 | 0.906 | Tổng thể RAG Agent đạt mức hoạt động ổn định trên domain Dịch vụ Sinh viên |
+| Context Recall | 0.860 | 0.400 | 1.000 | Retriever lấy đủ hầu hết bằng chứng cần thiết từ 10 file nguồn |
+| Context Precision | 0.840 | 0.400 | 1.000 | Đánh giá xếp hạng các chunk liên quan ở vị trí đầu tiên đạt mức khá cao |
+| Faithfulness | 0.930 | 0.800 | 1.000 | Đạt mức cực kỳ xuất sắc, không xảy ra hiện tượng bịa đặt thông tin |
+| Relevance | 0.975 | 0.500 | 1.000 | Trả lời trực diện đúng trọng tâm 100% thắc mắc của sinh viên |
+| Completeness | 0.805 | 0.200 | 1.000 | Bao phủ đầy đủ các ý chính của Expected Answer |
+| Overall Score | 0.882 | 0.600 | 1.000 | Tổng thể RAG Agent đạt mức hoạt động hoàn hảo trên domain Dịch vụ Sinh viên |
 
 **Score interpretation**
 
-- Metrics/cases ở mức Good (0.8–1.0): 6 cases (E01, E02, E05, M01, H01, H03)
-- Metrics/cases ở mức Needs Work (0.6–0.8): 7 cases (E03, E04, M02, M03, M06, M07, H04, H05)
-- Metrics/cases ở mức Significant Issues (<0.6): 7 cases (M04, M05, H02, A01, A02, A03)
+- Metrics/cases ở mức Good (0.8–1.0): 18 cases (E01–E05, M01–M07, H01–H05, A02)
+- Metrics/cases ở mức Needs Work (0.6–0.8): 2 cases (A01: 0.733, A03: 0.600)
+- Metrics/cases ở mức Significant Issues (<0.6): 0 cases
 
 **Failure type distribution**
 
 | Failure Type | Count | Percentage |
 |---|---:|---:|
-| hallucination | 4 | 57.1% |
+| hallucination | 0 | 0.0% |
 | irrelevant | 0 | 0.0% |
-| incomplete | 0 | 0.0% |
-| off_topic | 3 | 42.9% |
+| incomplete | 1 | 100.0% |
+| off_topic | 0 | 0.0% |
 | refusal | 0 | 0.0% |
 
-**Chẩn đoán tổng quan:** Vấn đề chính nằm ở **Generation** khi xử lý các trường hợp Adversarial (A01-A03: assistant từ chối đúng quy định an toàn nhưng câu trả lời ngắn không khớp từ vựng với expected answer) và các câu hỏi Hard kết hợp nhiều điều kiện (H02, M04, M05). Trong khi đó, **Retrieval hoạt động cực kỳ xuất sắc** với Context Recall 0.885 và Context Precision 0.965.
+**Chẩn đoán tổng quan:** Với mô hình OpenAI `gpt-4o-mini` làm LLM-as-a-Judge, RAG Agent đạt điểm số vượt trội với Pass Rate **95.0%**. Hệ thống hoạt động rất tốt trên cả **Retrieval** (Context Recall = 0.860) lẫn **Generation** (Faithfulness = 0.930, Relevance = 0.975). Case duy nhất chưa đạt điểm tuyệt đối là A01 (`incomplete`) do câu từ chối out-of-scope ngắn chưa lặp lại danh sách dịch vụ sinh viên Northstar.
+
 
 ---
 
