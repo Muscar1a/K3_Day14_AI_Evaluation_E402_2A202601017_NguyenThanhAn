@@ -287,19 +287,28 @@ verbosity bias và self-preference bằng cách nào? (Khớp với phương th�
 Chỉ làm sau khi hoàn thành 3.1–3.3. Chọn hai framework trong RAGAS, DeepEval
 và TruLens; chạy hoặc thiết kế một so sánh có cùng input dataset.
 
-| Tiêu chí | Framework 1: ____ | Framework 2: ____ |
+| Tiêu chí | Framework 1: RAGAS (`benchmark_results.json`) | Framework 2: DeepEval (`deepeval_results.json`) |
 |---|---|---|
-| Setup complexity | | |
-| Metrics available | | |
-| CI/CD integration | | |
-| Kết quả trên cùng dataset | | |
-| Insight rút ra | | |
+| Setup complexity | **Trung bình – Cao:** Cần chuyển đổi dữ liệu sang định dạng `datasets.Dataset` của HuggingFace; phụ thuộc nhiều vào mô hình LangChain/LlamaIndex. | **Thấp – Thân thiện Lập trình viên:** Tích hợp trực tiếp với Pytest (`deepeval test run`), cấu hình đơn giản qua Python decorator `@assert_test`. |
+| Metrics available | **Chuyên sâu RAG hạt mịn:** Faithfulness (phân rã mệnh đề nguyên tử), Answer Relevance (sinh câu hỏi tương tự), Context Recall, Context Precision, Aspect Critique. | **Đa dạng & Tùy biến cao:** G-Eval (Rubric chấm theo tiêu chí tùy chỉnh), Answer Relevancy, Faithfulness, Contextual Precision/Recall, Hallucination Metric, Toxicity/Bias. |
+| CI/CD integration | **Cần viết script thủ công:** Phải viết script Python tự kiểm tra ngưỡng điểm và ném exception để đánh rớt CI pipeline trong GitHub Actions. | **Native CLI & Pytest Support:** Chạy trực tiếp qua `deepeval test run`, tự động trả về exit code 1 khi vi phạm test assertion và hỗ trợ báo cáo JUnit XML. |
+| Kết quả thực nghiệm trên cùng dataset | Pass Rate: **65.0%** (13/20)<br>• Faithfulness TB: **0.557**<br>• Relevance TB: **0.663**<br>• Context Recall TB: **0.885**<br>• Context Precision TB: **0.922**<br>• Failures: 3 `off_topic`, 4 `hallucination` | Pass Rate: **95.0%** (19/20)<br>• Faithfulness TB: **0.839**<br>• Answer Relevancy TB: **0.822**<br>• Contextual Recall TB: **0.966**<br>• Contextual Precision TB: **0.685**<br>• Failures: 1 `refusal` (A02) |
+| Insight rút ra | Phù hợp nhất cho các nghiên cứu chuyên sâu (Research) và đánh giá độ chính xác dữ liệu trích xuất hạt mịn khắt khe (Statement Atomicity). | Phù hợp nhất cho đội ngũ kỹ thuật Production (Engineering CI/CD Pipeline) nhờ khả năng chấp nhận đồng nghĩa và xử lý đúng case từ chối an toàn. |
 
-- Scores có nhất quán không?
-- Framework nào strict hơn và vì sao?
-- Hai framework có tìm ra cùng failure cases không?
+- **Scores có nhất quán không?**
+  * Tương đối nhất quán ở xu hướng đánh giá Retrieval (Context Recall đạt 0.885 ở RAGAS và 0.966 ở DeepEval). Tuy nhiên, có sự chênh lệch lớn ở chỉ số **Faithfulness**: RAGAS chỉ đạt **0.557** do soi khắt khe từng mệnh đề tách biệt, trong khi DeepEval đạt **0.839** nhờ G-Eval CoT reasoning ghi nhận sự chính xác về ngữ nghĩa câu văn.
 
-> *Phân tích:*
+- **Framework nào strict hơn và vì sao?**
+  * **RAGAS strict hơn hẳn** (Pass Rate 65.0% vs DeepEval 95.0%). RAGAS phân rã câu trả lời thành các phát biểu hạt mịn (statement decomposition) rồi kiểm tra từng phát biểu với Context. Nếu Generator tổng hợp văn phong hoặc dùng từ ngữ bổ trợ không có nguyên văn trong Context, RAGAS sẽ trừ điểm lập tức.
+
+- **Hai framework có tìm ra cùng failure cases không?**
+  * **Có**, cả hai framework đều phát hiện ra điểm yếu của hệ thống ở nhóm câu hỏi **Adversarial** và các câu hỏi Hard đa điều kiện:
+    1. Ở case Prompt Injection `A02`, RAGAS đánh giá không pass (Score Overall `0.162`, `hallucination`), còn DeepEval cũng đánh giá không pass (Relevancy `0.000`) nhưng phân loại chuẩn xác hơn dưới dạng **`refusal`** (Từ chối an toàn).
+    2. Cả 2 framework đều ghi nhận điểm sụt giảm ở các câu Hard chứa quá nhiều quy định (`H02`, `M04`, `M05`).
+
+> *Phân tích:* Kết quả so sánh thực nghiệm từ `artifacts/benchmark_results.json` và `artifacts/deepeval_results.json` khẳng định: RAGAS phù hợp cho giai đoạn nghiên cứu phát triển để tối ưu hóa độ trung thực dữ liệu, trong khi DeepEval vượt trội hơn ở môi trường Production CI/CD nhờ khả năng nhận biết đúng các câu từ chối bảo vệ an toàn (Safety Refusals) và linh hoạt với câu từ tự nhiên của LLM.
+
+
 
 ### Exercise 3.5 — Retrieval Reranking (Bonus +5)
 
@@ -314,20 +323,26 @@ thay đổi Context Recall hay không.
 
 | ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
 |---|---:|---:|---:|---:|---:|
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| **Avg** | | | | | |
+| E03 | 1.000 | 1.000 | 0.833 | 1.000 | +0.167 |
+| M02 | 1.000 | 1.000 | 0.583 | 1.000 | +0.417 |
+| M05 | 0.652 | 0.652 | 0.917 | 0.806 | -0.111 |
+| H02 | 0.629 | 0.629 | 0.917 | 1.000 | +0.083 |
+| A03 | 0.550 | 0.550 | 0.679 | 1.000 | +0.321 |
+| **Avg (5 cases)** | **0.766** | **0.766** | **0.786** | **0.961** | **+0.175** |
+| **All 20 Avg** | **0.885** | **0.885** | **0.922** | **0.965** | **+0.043** |
 
 **Tại sao Recall dự kiến không đổi?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Context Recall chỉ đo đếm tỷ lệ phần trăm dữ kiện cần thiết (gold evidence) có mặt trong tập hợp các chunks được retrieve. Vì quá trình Reranking chỉ thực hiện sắp xếp lại (re-order) thứ tự xuất hiện của cùng tập hợp $K$ chunks ban đầu mà không thêm mới hay xóa bỏ bất kỳ chunk nào, nên tập các chunks được lấy ra là không đổi $\rightarrow$ **Context Recall giữ nguyên 100% không thay đổi (0.885 $\rightarrow$ 0.885)**.
 
 **Khi nào reranking không đủ và cần sửa retriever/query/chunking?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Reranking chỉ có tác dụng nâng thứ tự ưu tiên của những chunks đã được lấy ra từ bước Retrieve ban đầu. Reranking sẽ **thất bại và không đủ** khi:
+> 1. **Retrieval Miss (Recall kém):** Thông tin đúng hoàn toàn không nằm trong Top-K chunks được lấy ra từ BM25/Dense Retriever (như case `A03` có recall = 0.550). Khi thông tin không được lấy về từ đầu, Reranker không thể "tạo ra" thông tin mới.
+> 2. **Context Fragmentation (Chunking sai):** Kích thước chunk quá nhỏ làm thông tin bị xé lẻ thành nhiều câu rời rạc ở nhiều chunk khác nhau.
+> 3. **Query Ambiguity (Câu hỏi mơ hồ / Lexical Mismatch):** Như case `M05` (Precision giảm từ 0.917 xuống 0.806 do từ khóa câu hỏi khớp với một chunk tổng quát khác), khi đó cần bổ sung **Dense Semantic Reranker / Cross-Encoder** hoặc **Query Rewriting / HyDE** thay cho Lexical Overlap Reranker đơn thuần.
+
+
 
 ---
 
@@ -341,11 +356,12 @@ Hoàn thành `reflection.md` bằng kết quả thật từ Exercise 3.2.
 
 Hoàn thành kiểm tra cuối trong khoảng 11:50–12:00.
 
-- [ ] Tất cả required tests pass.
-- [ ] `golden_dataset.json` validate thành công.
-- [ ] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
-- [ ] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
-- [ ] Exercise 3.3 có rubric 1–5 và bias controls.
-- [ ] `reflection.md` có ba failure analyses và regression strategy.
-- [ ] Đã copy `template.py` thành `solution/solution.py`.
-- [ ] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
+- [x] Tất cả required tests pass (`pytest tests/ -v` 42/42 PASSED).
+- [x] `golden_dataset.json` validate thành công (`python validate_golden_dataset.py` PASS).
+- [x] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
+- [x] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
+- [x] Exercise 3.3 có rubric 1–5 và bias controls.
+- [x] `reflection.md` có ba failure analyses và regression strategy.
+- [x] Đã copy `template.py` thành `solution/solution.py`.
+- [x] Exercise 3.4 và 3.5 hoàn thành cả 2 phần bonus (+10 và +5).
+

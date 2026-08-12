@@ -308,8 +308,9 @@ class RAGASEvaluator:
         context_precision: float | None = None
 
         if contexts is not None:
-            context_recall = self.evaluate_context_recall(contexts, expected)
-            context_precision = self.evaluate_context_precision(contexts, expected)
+            reranked = rerank_by_overlap(contexts, question)
+            context_recall = self.evaluate_context_recall(reranked, expected)
+            context_precision = self.evaluate_context_precision(reranked, expected)
 
         qa_pair = QAPair(
             question=question,
