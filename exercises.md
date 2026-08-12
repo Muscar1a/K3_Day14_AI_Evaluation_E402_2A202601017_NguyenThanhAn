@@ -326,24 +326,25 @@ thay đổi Context Recall hay không.
 
 | ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
 |---|---:|---:|---:|---:|---:|
-| E03 | 1.000 | 1.000 | 0.833 | 1.000 | +0.167 |
-| M02 | 1.000 | 1.000 | 0.583 | 1.000 | +0.417 |
-| M05 | 0.652 | 0.652 | 0.917 | 0.806 | -0.111 |
-| H02 | 0.629 | 0.629 | 0.917 | 1.000 | +0.083 |
-| A03 | 0.550 | 0.550 | 0.679 | 1.000 | +0.321 |
-| **Avg (5 cases)** | **0.766** | **0.766** | **0.786** | **0.961** | **+0.175** |
-| **All 20 Avg** | **0.885** | **0.885** | **0.922** | **0.965** | **+0.043** |
+| E03 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 |
+| M02 | 1.000 | 0.900 | 0.800 | 0.800 | 0.000 |
+| M05 | 0.600 | 0.600 | 0.600 | 0.800 | +0.200 |
+| H02 | 0.700 | 0.700 | 0.800 | 0.600 | -0.200 |
+| A03 | 0.800 | 0.900 | 0.800 | 0.900 | +0.100 |
+| **Avg (5 cases)** | **0.820** | **0.820** | **0.800** | **0.820** | **+0.020** |
+| **All 20 Avg** | **0.865** | **0.860** | **0.860** | **0.840** | **-0.020** |
 
 **Tại sao Recall dự kiến không đổi?**
 
-> *Câu trả lời:* Context Recall chỉ đo đếm tỷ lệ phần trăm dữ kiện cần thiết (gold evidence) có mặt trong tập hợp các chunks được retrieve. Vì quá trình Reranking chỉ thực hiện sắp xếp lại (re-order) thứ tự xuất hiện của cùng tập hợp $K$ chunks ban đầu mà không thêm mới hay xóa bỏ bất kỳ chunk nào, nên tập các chunks được lấy ra là không đổi $\rightarrow$ **Context Recall giữ nguyên 100% không thay đổi (0.885 $\rightarrow$ 0.885)**.
+> *Câu trả lời:* Context Recall chỉ đo đếm tỷ lệ phần trăm dữ kiện cần thiết (gold evidence) có mặt trong tập hợp các chunks được retrieve. Vì quá trình Reranking chỉ thực hiện sắp xếp lại (re-order) thứ tự xuất hiện của cùng tập hợp $K$ chunks ban đầu mà không thêm mới hay xóa bỏ bất kỳ chunk nào, nên tập các chunks được lấy về là giữ nguyên không đổi $\rightarrow$ **Context Recall giữ nguyên gần như tương đương (~0.86)**.
 
 **Khi nào reranking không đủ và cần sửa retriever/query/chunking?**
 
 > *Câu trả lời:* Reranking chỉ có tác dụng nâng thứ tự ưu tiên của những chunks đã được lấy ra từ bước Retrieve ban đầu. Reranking sẽ **thất bại và không đủ** khi:
-> 1. **Retrieval Miss (Recall kém):** Thông tin đúng hoàn toàn không nằm trong Top-K chunks được lấy ra từ BM25/Dense Retriever (như case `A03` có recall = 0.550). Khi thông tin không được lấy về từ đầu, Reranker không thể "tạo ra" thông tin mới.
+> 1. **Retrieval Miss (Recall kém):** Thông tin đúng hoàn toàn không nằm trong Top-K chunks được lấy ra từ BM25/Dense Retriever. Khi thông tin không được lấy về từ đầu, Reranker không thể "tạo ra" thông tin mới.
 > 2. **Context Fragmentation (Chunking sai):** Kích thước chunk quá nhỏ làm thông tin bị xé lẻ thành nhiều câu rời rạc ở nhiều chunk khác nhau.
-> 3. **Query Ambiguity (Câu hỏi mơ hồ / Lexical Mismatch):** Như case `M05` (Precision giảm từ 0.917 xuống 0.806 do từ khóa câu hỏi khớp với một chunk tổng quát khác), khi đó cần bổ sung **Dense Semantic Reranker / Cross-Encoder** hoặc **Query Rewriting / HyDE** thay cho Lexical Overlap Reranker đơn thuần.
+> 3. **Query Ambiguity / Lexical Mismatch:** Khi sử dụng Lexical Overlap Reranker, các câu hỏi chứa thuật ngữ mơ hồ có thể làm đảo lộn vị trí ưu tiên của chunk đúng (như trường hợp case `H02` làm sụt giảm Precision từ 0.800 xuống 0.600). Khi đó cần phải áp dụng **Dense Semantic Reranker / Cross-Encoder** hoặc **Query Rewriting / HyDE**.
+
 
 
 

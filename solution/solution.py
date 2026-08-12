@@ -361,6 +361,7 @@ class RAGASEvaluator:
             context_recall = self.evaluate_context_recall(reranked, expected)
             context_precision = self.evaluate_context_precision(reranked, expected)
 
+
         qa_pair = QAPair(
             question=question,
             expected_answer=expected,
